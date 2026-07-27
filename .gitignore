@@ -1,0 +1,24 @@
+# OS / editor junk
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.vscode/
+.idea/
+
+# Dependency / build output
+node_modules/
+dist/
+build/
+out/
+__pycache__/
+*.pyc
+.env
+.env.local
+
+# WorkBuddy agent memory — do NOT commit (may contain private notes)
+.workbuddy/
+
+# Logs
+*.log
