@@ -29,9 +29,9 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 // ---------- 可调参数 ----------
-const HEART_COUNT = 24000;   // 心脏点云数量：少而清晰，避免中心叠加成亮块
-const AURA_COUNT  = 3200;    // 贴附心脏的光环粒子
-const SPARK_COUNT = 4200;    // 环绕飞溅的粒子
+const HEART_COUNT = 36000;   // 心脏点云数量：外壳加内腔，饱满但不叠成亮块
+const AURA_COUNT  = 2600;    // 贴附心脏的光环粒子
+const SPARK_COUNT = 4000;    // 环绕飞溅的粒子
 const STAR_COUNT  = 1800;    // 背景星点
 const BASE_SCALE  = 1.85;    // 心脏基础大小
 
@@ -44,7 +44,7 @@ const AURA_SPRING  = 16.0;
 const AURA_BURST   = 5.0;
 const AURA_SWIRL   = 0.6;
 const AURA_DAMP    = 3.2;
-const AURA_REST    = 0.32;   // 光环外偏移：与心脏表面拉开距离
+const AURA_REST    = 0.38;   // 光环最大扩散半径
 
 // ---------- 渲染器 / 场景 ----------
 const canvas = document.getElementById('c');
@@ -52,7 +52,7 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPrefere
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.68;
+renderer.toneMappingExposure = 0.78;
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x05030c, 0.035);
@@ -69,24 +69,49 @@ controls.minDistance = 3.2;
 controls.maxDistance = 16;
 
 // ---------- 心形隐函数点云采样 ----------
+// 从中心向每个方向求隐函数交点：轮廓连续，心瓣和尖端不会随机缺粒
 // (x^2 + 9/4 y^2 + z^2 - 1)^3 - x^2 z^3 - 9/80 y^2 z^3 = 0，z 为竖直方向
+function heartF(x, y, z) {
+  const a = x * x + 2.25 * y * y + z * z - 1;
+  return a * a * a - x * x * z * z * z - 0.1125 * y * y * z * z * z;
+}
 function sampleHeart(count) {
   const pos = new Float32Array(count * 3);
-  let n = 0, attempts = 0;
-  const maxAttempts = count * 600;
-  while (n < count && attempts < maxAttempts) {
-    attempts++;
-    const x = (Math.random() * 2 - 1) * 1.30;
-    const y = (Math.random() * 2 - 1) * 1.30; // 深度
-    const z = (Math.random() * 2 - 1) * 1.45; // 竖直
-    const a = x * x + 2.25 * y * y + z * z - 1;
-    const f = a * a * a - x * x * z * z * z - 0.1125 * y * y * z * z * z;
-    if (Math.abs(f) < 0.045) {
-      pos[n * 3]     = x;
-      pos[n * 3 + 1] = z;   // Three.js Y = z(上)
-      pos[n * 3 + 2] = y;   // Three.js Z = y(深)
-      n++;
+  let n = 0;
+  while (n < count) {
+    // 均匀随机方向
+    let dx = Math.random() * 2 - 1;
+    let dy = Math.random() * 2 - 1;
+    let dz = Math.random() * 2 - 1;
+    const l = Math.hypot(dx, dy, dz);
+    if (l < 1e-5) continue;
+    dx /= l; dy /= l; dz /= l;
+
+    // 找从内部到外表面的第一个交点
+    let lo = 0, hi = 0;
+    for (let r = 0.08; r <= 1.8; r += 0.08) {
+      if (heartF(dx * r, dy * r, dz * r) > 0) { hi = r; break; }
+      lo = r;
     }
+    if (hi === 0) continue;
+    for (let k = 0; k < 10; k++) {
+      const mid = (lo + hi) * 0.5;
+      if (heartF(dx * mid, dy * mid, dz * mid) > 0) hi = mid;
+      else lo = mid;
+    }
+
+    // 65% 外壳保轮廓，35% 内腔保饱满；径向抖动避免粒子排成整齐网
+    const shell = n % 100 < 65;
+    const radial = shell
+      ? (lo + (Math.random() - 0.5) * 0.025)
+      : lo * (0.18 + 0.82 * Math.sqrt(Math.random()));
+    const x = dx * radial;
+    const y = dy * radial;
+    const z = dz * radial;
+    pos[n * 3]     = x;
+    pos[n * 3 + 1] = z;   // Three.js Y = z(上)
+    pos[n * 3 + 2] = y;   // Three.js Z = y(深)
+    n++;
   }
   return pos.subarray(0, n * 3);
 }
@@ -134,10 +159,10 @@ const vert = `
     // 脉冲式闪烁：永远为正，避免负透明度产生黑色脏点
     float pulse = 0.5 + 0.5 * sin(uTime * 2.1 + aSeed * 6.2831);
     float tw = 0.35 + 0.65 * pulse;
-    // 心脏层在收缩期明显变透明；运动粒子层保持可见
-    float beatAlpha = mix(1.0, 0.22 + 0.78 * uBeat, uIsHeart);
+    // 心脏层在收缩期更透明；运动粒子层保持可见
+    float beatAlpha = mix(1.0, 0.46 + 0.54 * uBeat, uIsHeart);
     vAlpha = tw * uAlpha * beatAlpha;
-    float s = aSize * (1.0 + uBeat * 0.28);
+    float s = aSize * (1.0 + uBeat * 0.12);
     gl_PointSize = s * uPixelRatio * (44.0 / max(0.1, -mv.z));
     gl_Position = projectionMatrix * mv;
   }
@@ -150,7 +175,7 @@ const frag = `
     float d = length(gl_PointCoord - vec2(0.5));
     if (d > 0.5) discard;
     float a = pow(1.0 - d * 2.0, 1.8);
-    vec3 col = vColor * (0.7 + uBeat * 0.5);
+    vec3 col = vColor * (0.68 + uBeat * 0.38);
     gl_FragColor = vec4(max(col, vec3(0.0)), clamp(a * vAlpha, 0.0, 1.0));
   }
 `;
@@ -170,10 +195,9 @@ function makeMaterial({ alpha = 1, isHeart = false, additive = true } = {}) {
       blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
   });
 }
-// 心脏用普通透明混合，避免数万点加色叠加把中心烧白
-const heartMat = makeMaterial({ alpha: 0.5, isHeart: true, additive: false });
-heartMat.depthWrite = true; // 只保留清晰的前排壳层，避免前后几十层粒子叠成亮雾
-const fxMat = makeMaterial({ alpha: 0.55 });
+// 全部使用加色混合：透明点不会互相裁切成黑色颗粒
+const heartMat = makeMaterial({ alpha: 0.37, isHeart: true });
+const fxMat = makeMaterial({ alpha: 0.52 });
 
 function makeGeo(pos, col, size, seed) {
   const g = new THREE.BufferGeometry();
@@ -206,7 +230,7 @@ const heartGroup = new THREE.Group();
     c.b = Math.min(1, c.b * (1.0 + 0.5 * cen));
     c.convertSRGBToLinear();
     col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
-    size[i] = 1.9 + Math.random() * 1.8; // 统一大小，两端饱满
+    size[i] = 1.02 + Math.random() * 0.46; // 统一小颗粒，避免大块光斑
     seed[i] = Math.random();
   }
   const g = makeGeo(heartPos.slice(), col, size, seed);
@@ -236,14 +260,14 @@ const aura = (() => {
     anchor[i] = (Math.random() * HN) | 0;
     hp(anchor[i], _a);
     _o.copy(_a).normalize();
-    rest[i] = AURA_REST + Math.random() * 0.32;
-    pos[i*3]   = _a.x * BASE_SCALE + _o.x * rest[i];
-    pos[i*3+1] = _a.y * BASE_SCALE + _o.y * rest[i];
-    pos[i*3+2] = _a.z * BASE_SCALE + _o.z * rest[i];
+    rest[i] = AURA_REST + Math.random() * 0.55; // 心跳扩散半径；收缩时回到 0
+    pos[i*3]   = _a.x * BASE_SCALE;
+    pos[i*3+1] = _a.y * BASE_SCALE;
+    pos[i*3+2] = _a.z * BASE_SCALE;
     grad(0.7 + Math.random() * 0.3, c);
     c.convertSRGBToLinear();
     col[i*3] = c.r; col[i*3+1] = c.g; col[i*3+2] = c.b;
-    base[i] = 1.6 + Math.random() * 2.2;
+    base[i] = 1.08 + Math.random() * 0.5;
     size[i] = base[i];
     seed[i] = Math.random();
   }
@@ -270,12 +294,11 @@ const spark = (() => {
     anchor[i] = (Math.random() * HN) | 0;
     hp(anchor[i], _a);
     _o.copy(_a).normalize();
-    rest[i] = 0.38 + Math.random() * 0.92; // 每颗粒子有独立静止半径，收缩时不会堆回中心
-    const r = rest[i];
-    pos[i*3]   = _a.x * BASE_SCALE + _o.x * r;
-    pos[i*3+1] = _a.y * BASE_SCALE + _o.y * r;
-    pos[i*3+2] = _a.z * BASE_SCALE + _o.z * r;
-    vel[i*3] = _o.x * 0.6; vel[i*3+1] = _o.y * 0.6; vel[i*3+2] = _o.z * 0.6;
+    rest[i] = 0.62 + Math.random() * 1.18; // 每颗粒子的扩散半径
+    pos[i*3]   = _a.x * BASE_SCALE;
+    pos[i*3+1] = _a.y * BASE_SCALE;
+    pos[i*3+2] = _a.z * BASE_SCALE;
+    vel[i*3] = 0; vel[i*3+1] = 0; vel[i*3+2] = 0;
     maxLife[i] = 2.2 + Math.random() * 3.0;
     life[i] = maxLife[i];
   }
@@ -285,7 +308,7 @@ const spark = (() => {
     if (Math.random() < 0.12) c.lerp(PRISM[(Math.random() * PRISM.length) | 0], 0.7);
     c.convertSRGBToLinear();
     col[i*3] = c.r; col[i*3+1] = c.g; col[i*3+2] = c.b;
-    base[i] = 1.8 + Math.random() * 2.0;
+    base[i] = 1.12 + Math.random() * 0.56;
     size[i] = base[i];
     seed[i] = Math.random();
   }
@@ -322,7 +345,7 @@ scene.add(spark.pts);
 // ---------- 后处理辉光（水晶璀璨感） ----------
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.45, 0.38);
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.4, 0.55, 0.32);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
@@ -343,14 +366,16 @@ function updateAura(dt, b) {
     const a = aura.anchor[i];
     hp(a, _a);
     _o.copy(_a).normalize();
-    _t.set(_a.x * s + _o.x * aura.rest[i], _a.y * s + _o.y * aura.rest[i], _a.z * s + _o.z * aura.rest[i]);
+    // b=0 时目标就是原始心形锚点；b 增大才扩散到个人半径
+    const spread = aura.rest[i] * b;
+    _t.set(_a.x * s + _o.x * spread, _a.y * s + _o.y * spread, _a.z * s + _o.z * spread);
     const px = aura.pos[i*3], py = aura.pos[i*3+1], pz = aura.pos[i*3+2];
     let ax = (_t.x - px) * AURA_SPRING + _o.x * (b * AURA_BURST);
     let ay = (_t.y - py) * AURA_SPRING + _o.y * (b * AURA_BURST);
     let az = (_t.z - pz) * AURA_SPRING + _o.z * (b * AURA_BURST);
     _a.set(px, py, pz).normalize();
     _a.crossVectors(UP, _a);
-    if (_a.lengthSq() > 1e-4) { ax += _a.x * AURA_SWIRL; ay += _a.y * AURA_SWIRL; az += _a.z * AURA_SWIRL; }
+    if (_a.lengthSq() > 1e-4) { ax += _a.x * AURA_SWIRL * b; ay += _a.y * AURA_SWIRL * b; az += _a.z * AURA_SWIRL * b; }
     aura.vel[i*3]   = (aura.vel[i*3]   + ax * dt) * dampF;
     aura.vel[i*3+1] = (aura.vel[i*3+1] + ay * dt) * dampF;
     aura.vel[i*3+2] = (aura.vel[i*3+2] + az * dt) * dampF;
@@ -369,14 +394,16 @@ function updateSpark(dt, b) {
     const a = spark.anchor[i];
     hp(a, _a);
     _o.copy(_a).normalize();
-    _t.set(_a.x * s + _o.x * spark.rest[i], _a.y * s + _o.y * spark.rest[i], _a.z * s + _o.z * spark.rest[i]);
+    // 所有飞溅粒子同样收缩回原始心形，再按心跳强度扩散
+    const spread = spark.rest[i] * b;
+    _t.set(_a.x * s + _o.x * spread, _a.y * s + _o.y * spread, _a.z * s + _o.z * spread);
     const px = spark.pos[i*3], py = spark.pos[i*3+1], pz = spark.pos[i*3+2];
     let ax = (_t.x - px) * SPARK_SPRING + _o.x * (b * SPARK_BURST);
     let ay = (_t.y - py) * SPARK_SPRING + _o.y * (b * SPARK_BURST);
     let az = (_t.z - pz) * SPARK_SPRING + _o.z * (b * SPARK_BURST);
     _a.set(px, py, pz).normalize();
     _a.crossVectors(UP, _a);
-    if (_a.lengthSq() > 1e-4) { ax += _a.x * SPARK_SWIRL; ay += _a.y * SPARK_SWIRL; az += _a.z * SPARK_SWIRL; }
+    if (_a.lengthSq() > 1e-4) { ax += _a.x * SPARK_SWIRL * b; ay += _a.y * SPARK_SWIRL * b; az += _a.z * SPARK_SWIRL * b; }
     spark.vel[i*3]   = (spark.vel[i*3]   + ax * dt) * dampF;
     spark.vel[i*3+1] = (spark.vel[i*3+1] + ay * dt) * dampF;
     spark.vel[i*3+2] = (spark.vel[i*3+2] + az * dt) * dampF;
