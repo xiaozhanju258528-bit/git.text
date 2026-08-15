@@ -52,7 +52,7 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPrefere
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.78;
+renderer.toneMappingExposure = 0.82;
 
 const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x05030c, 0.035);
@@ -159,8 +159,10 @@ const vert = `
     // 脉冲式闪烁：永远为正，避免负透明度产生黑色脏点
     float pulse = 0.5 + 0.5 * sin(uTime * 2.1 + aSeed * 6.2831);
     float tw = 0.35 + 0.65 * pulse;
-    // 心脏层在收缩期更透明；运动粒子层保持可见
-    float beatAlpha = mix(1.0, 0.46 + 0.54 * uBeat, uIsHeart);
+    // 收缩末段呈现清晰心形；扩散最大时只剩隐约轮廓
+    float spreadFade = 1.0 - 0.45 * uBeat;
+    float heartFade = 1.15 - 0.82 * uBeat;
+    float beatAlpha = clamp(mix(spreadFade, heartFade, uIsHeart), 0.0, 1.15);
     vAlpha = tw * uAlpha * beatAlpha;
     float s = aSize * (1.0 + uBeat * 0.12);
     gl_PointSize = s * uPixelRatio * (44.0 / max(0.1, -mv.z));
@@ -175,7 +177,7 @@ const frag = `
     float d = length(gl_PointCoord - vec2(0.5));
     if (d > 0.5) discard;
     float a = pow(1.0 - d * 2.0, 1.8);
-    vec3 col = vColor * (0.68 + uBeat * 0.38);
+    vec3 col = vColor * (0.82 + uBeat * 0.18);
     gl_FragColor = vec4(max(col, vec3(0.0)), clamp(a * vAlpha, 0.0, 1.0));
   }
 `;
@@ -196,8 +198,8 @@ function makeMaterial({ alpha = 1, isHeart = false, additive = true } = {}) {
   });
 }
 // 全部使用加色混合：透明点不会互相裁切成黑色颗粒
-const heartMat = makeMaterial({ alpha: 0.37, isHeart: true });
-const fxMat = makeMaterial({ alpha: 0.52 });
+const heartMat = makeMaterial({ alpha: 0.46, isHeart: true });
+const fxMat = makeMaterial({ alpha: 0.58 });
 
 function makeGeo(pos, col, size, seed) {
   const g = new THREE.BufferGeometry();
@@ -345,7 +347,7 @@ scene.add(spark.pts);
 // ---------- 后处理辉光（水晶璀璨感） ----------
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.4, 0.55, 0.32);
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.46, 0.55, 0.3);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
